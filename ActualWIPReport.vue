@@ -1,5 +1,5 @@
 <template>
-    <div class="min-h-screen w-full p-6 bg-gray-50">
+    <div class="min-h-screen w-full p-6">
 
         <div class="w-full mx-auto">
             <!-- Header -->
@@ -143,34 +143,25 @@
 
                     <!-- Pagination Controls -->
                     <div class="flex items-center justify-between mt-4">
-                        <span class="text-xs text-gray-500">Page {{ currentPage }}</span>
+                        <span class="text-xs text-gray-500">
+                            Page {{ currentPageNumber }} of
+                            <span v-if="totalPagesLoading" class="inline-block w-8 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
+                            <template v-else>{{ totalPages || 1 }}</template>
+                        </span>
                         <div class="flex items-center gap-1.5">
-                            <button @click="goToPage(currentPage - 1)" :disabled="currentPage === 1"
-                                class="px-2.5 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50">
+                            <button @click="goToPrevPage" :disabled="!canGoPrev"
+                                class="px-2.5 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed bg-gray-100 hover:bg-white">
                                 <i class="fas fa-angle-left"></i> Previous
                             </button>
-                            <template v-for="(p, idx) in pageWindow" :key="idx">
-                                <span v-if="p === null" class="px-1 text-sm text-gray-400">&hellip;</span>
-                                <button v-else @click="goToPage(p)"
-                                    class="px-3 py-1.5 text-sm rounded-md border"
-                                    :class="p === currentPage
-                                        ? 'border-blue-500 bg-blue-50 text-blue-600 font-semibold'
-                                        : 'border-gray-300 text-gray-600 hover:bg-gray-50'">
-                                    {{ p }}
-                                </button>
-                            </template>
-                            <button @click="goToPage(currentPage + 1)" :disabled="!hasNextPage"
-                                class="px-2.5 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50">
+                            <button @click="goToNextPage" :disabled="!canGoNext"
+                                class="px-2.5 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed bg-gray-100 hover:bg-white">
                                 Next <i class="fas fa-angle-right"></i>
                             </button>
                         </div>
-                        <span class="text-xs font-normal text-gray-500">
-                            Page {{ currentPage }} of
-                            <span v-if="loading" class="inline-block w-8 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
-                            <template v-else>{{ totalPages || 1 }}</template>
-                            &middot;
-                            <span v-if="loading" class="inline-block w-14 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
-                            <template v-else>{{ totalCount }} records</template>
+                        <span class="text-xs font-normal text-gray-500 flex items-center gap-1.5">
+                            <span v-if="loading" class="inline-block w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
+                            <template v-if="!loading">{{ wipData.length }} records on this page</template>
+                            <template v-else>Loading records&hellip;</template>
                         </span>
                     </div>
                 </div>
@@ -197,30 +188,42 @@ export default {
 
         const skeletonRowCount = PAGE_SIZE;
         const showDropdown = ref(false);
-        const currentPage = ref(1);
-        const totalPages = ref(0);
-        const totalCount = ref(0);
-        const hasNextPage = ref(false);
+        // Keyset (seek) pagination: each page load asks the backend for rows
+        // strictly after (or before) a cursor ID, so every page loads in
+        // roughly constant time regardless of depth -- unlike page-number/
+        // OFFSET-based paging, which gets slower the deeper you go because
+        // the database has to scan through every prior row first.
+        const currentPageNumber = ref(1);
+        const canGoNext = ref(false);
+        const canGoPrev = ref(false);
+        // Stack of "first row ID on this page" for every page visited so far,
+        // so Previous can seek backward from the current page's first ID.
+        const pageStartCursors = ref([null]);
+        // Total page count is included only in the very first response (no
+        // cursorId) -- the backend runs a one-time COUNT(*) scan for that
+        // request only, never on subsequent Next/Previous clicks.
+        const totalPages = ref(null);
+        const totalPagesLoading = ref(true);
 
         const toggleDropdown = () => {
             showDropdown.value = !showDropdown.value;
         };
 
-        const loadPage = async (page) => {
+        const loadPage = async (cursorId, direction) => {
             loading.value = true;
             try {
                 await fetchActualWipData({}, {
-                    page,
                     pageSize: PAGE_SIZE,
+                    cursorId,
+                    direction,
                 });
                 wipData.value = actualWipData.value.data || [];
-                currentPage.value = actualWipData.value.page || page;
-                totalPages.value = actualWipData.value.totalPages || 0;
-                totalCount.value = actualWipData.value.totalCount || 0;
-                // Don't rely solely on totalPages/totalCount (backend COUNT can
-                // fail independently of the main data query) -- a full page of
-                // rows means there may be a next page regardless.
-                hasNextPage.value = wipData.value.length === PAGE_SIZE;
+                canGoNext.value = Boolean(actualWipData.value.hasNext);
+                canGoPrev.value = Boolean(actualWipData.value.hasPrev);
+                if (actualWipData.value.totalPages !== null && actualWipData.value.totalPages !== undefined) {
+                    totalPages.value = actualWipData.value.totalPages;
+                    totalPagesLoading.value = false;
+                }
             } catch (error) {
                 $toast.error("Error fetching data", { position: "top" });
             } finally {
@@ -228,44 +231,25 @@ export default {
             }
         };
 
-        const goToPage = (page) => {
-            if (page < 1 || page === currentPage.value) { return; }
-            loadPage(page);
+        const goToNextPage = async () => {
+            if (!canGoNext.value) { return; }
+            const lastId = actualWipData.value.lastId;
+            await loadPage(lastId, 'next');
+            currentPageNumber.value += 1;
+            pageStartCursors.value.push(lastId);
         };
 
-        // Effective last known page: the real totalPages when the backend
-        // COUNT succeeded, otherwise just far enough to cover the current
-        // page (plus one more if we know another page exists).
-        const knownLastPage = computed(() => {
-            if (totalPages.value > 0) { return totalPages.value; }
-            return currentPage.value + (hasNextPage.value ? 1 : 0);
-        });
-
-        // Page numbers to render: always first and last, a window around the
-        // current page, and `null` entries where a "..." gap belongs.
-        const pageWindow = computed(() => {
-            const last = knownLastPage.value;
-            const current = currentPage.value;
-            if (last <= 1) { return [1]; }
-
-            const windowSize = 1;
-            const pages = new Set([1, last]);
-            for (let p = current - windowSize; p <= current + windowSize; p++) {
-                if (p >= 1 && p <= last) { pages.add(p); }
-            }
-
-            const sorted = [...pages].sort((a, b) => a - b);
-            const result = [];
-            for (let i = 0; i < sorted.length; i++) {
-                if (i > 0 && sorted[i] - sorted[i - 1] > 1) { result.push(null); }
-                result.push(sorted[i]);
-            }
-            return result;
-        });
+        const goToPrevPage = async () => {
+            if (!canGoPrev.value || currentPageNumber.value <= 1) { return; }
+            pageStartCursors.value.pop();
+            const prevCursor = pageStartCursors.value[pageStartCursors.value.length - 1];
+            await loadPage(prevCursor, prevCursor ? 'next' : undefined);
+            currentPageNumber.value -= 1;
+        };
 
         const filteredData = computed(() => wipData.value);
 
-        const totalWorkOrders = computed(() => totalCount.value);
+        const totalWorkOrders = computed(() => wipData.value.length);
 
         const totalQuantity = computed(() => {
             return wipData.value.reduce((sum, row) => sum + (Number(row.orderedQuantity) || 0), 0);
@@ -283,7 +267,7 @@ export default {
         });
 
         onMounted(async () => {
-            await loadPage(1);
+            await loadPage(null, undefined);
         });
 
         const getTimestamp = () => {
@@ -393,12 +377,13 @@ export default {
             totalWorkOrders,
             totalQuantity,
             statusCounts,
-            currentPage,
+            currentPageNumber,
+            canGoNext,
+            canGoPrev,
+            goToNextPage,
+            goToPrevPage,
+            totalPagesLoading,
             totalPages,
-            totalCount,
-            hasNextPage,
-            pageWindow,
-            goToPage,
         };
     }
 };

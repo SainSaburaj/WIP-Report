@@ -61,20 +61,41 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
         /**
          * Builds the shared inner SELECT (Actual WIP source data, unfiltered,
          * unpaged) plus its fixed positional params. Reused by both the report
-         * fetch and the filter-dropdown distinct-value queries so the join
-         * logic only lives in one place.
-         * @param {number} [rowLimit] - when set, adds "AND ROWNUM <= rowLimit"
-         *   to the query's own outermost WHERE (no extra subquery level), so
-         *   NetSuite can stop scanning early on very large datasets.
+         * fetch and any COUNT/aggregate query so the join logic only lives in
+         * one place.
+         *
+         * All joins use ANSI LEFT JOIN syntax. The original saved-search-export
+         * version of this query used Oracle-style "(+)" outer joins throughout,
+         * which SuiteQL does not reliably support once any pagination wrapping
+         * (ROWNUM subquery, OFFSET/FETCH) is layered on top -- that combination
+         * produced generic UNEXPECTED_ERRORs specifically inside NetSuite's
+         * paged-result fetch. Converting every join to ANSI syntax removes that
+         * failure mode entirely.
+         *
+         * @param {{cursorId?: number, direction?: 'next'|'prev'}} [seek] - keyset
+         *   pagination cursor. When set, adds a WHERE condition on
+         *   CUSTOMRECORD_JJ_BAG_GENERATION.ID (a stable, unique, indexed key)
+         *   so NetSuite can seek directly to the requested window instead of
+         *   scanning/counting through every prior row (which is what OFFSET
+         *   and ROWNUM both do under the hood).
          * @param {string} [selectOverride] - when set, replaces the full SELECT
          *   column list with this raw SQL (e.g. "COUNT(*) AS total_count") so a
-         *   COUNT/aggregate query can share the exact same FROM/WHERE/joins
-         *   without adding any extra subquery wrapping level.
+         *   COUNT/aggregate query can share the exact same FROM/WHERE/joins.
          * @returns {{innerQuery: string, baseParams: Array<string>}}
          */
-        const buildActualWIPInnerQuery = (rowLimit, selectOverride) => {
-            let rowLimitClause = rowLimit ? `AND ROWNUM <= ${Number(rowLimit)}` : '';
+        const buildActualWIPInnerQuery = (seek, selectOverride) => {
+            seek = seek || {};
+            let seekClause = '';
+            if (seek.cursorId) {
+                seekClause = seek.direction === 'prev'
+                    ? 'AND CUSTOMRECORD_JJ_BAG_GENERATION.ID < ?'
+                    : 'AND CUSTOMRECORD_JJ_BAG_GENERATION.ID > ?';
+            }
+            let orderAndFetchClause = seek.pageSize
+                ? `ORDER BY CUSTOMRECORD_JJ_BAG_GENERATION.ID ${seek.direction === 'prev' ? 'DESC' : 'ASC'} FETCH NEXT ${Number(seek.pageSize) + 1} ROWS ONLY`
+                : '';
             let selectList = selectOverride || `
+                      BUILTIN_RESULT.TYPE_INTEGER(CUSTOMRECORD_JJ_BAG_GENERATION.ID) AS bag_generation_id,
                       BUILTIN_RESULT.TYPE_INTEGER(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_so) AS custrecord_jj_bagcore_so,
                       BUILTIN_RESULT.TYPE_STRING(CASE WHEN CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_exit IS NULL THEN CUSTOMRECORD_JJ_OPERATIONS_SUB.firstname END) AS manufacturer,
                       BUILTIN_RESULT.TYPE_STRING(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.firstname_0_0) AS sales_executive,
@@ -125,7 +146,8 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                     SELECT
                       ${selectList}
                     FROM
-                      CUSTOMRECORD_JJ_BAG_GENERATION,
+                      CUSTOMRECORD_JJ_BAG_GENERATION
+                    LEFT JOIN
                       (SELECT
                         CUSTOMRECORD_JJ_BAGCORE_MATERIALS.custrecord_jj_bagcoremat_bag_name AS custrecord_jj_bagcoremat_bag_name,
                         CUSTOMRECORD_JJ_BAGCORE_MATERIALS.custrecord_jj_bagcoremat_bag_name AS custrecord_jj_bagcoremat_bag_name_join,
@@ -147,7 +169,8 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                         item_SUB_0.id_join_0 AS id_join_0_0,
                         CUSTOMRECORD_JJ_BAG_LOT_DETAILS_SUB.custrecord_jj_pieces AS custrecord_jj_pieces_0
                       FROM
-                        CUSTOMRECORD_JJ_BAGCORE_MATERIALS,
+                        CUSTOMRECORD_JJ_BAGCORE_MATERIALS
+                      LEFT JOIN
                         (SELECT
                           CUSTOMRECORD_JJ_BAG_LOT_DETAILS.custrecord_jj_bag_core_material AS custrecord_jj_bag_core_material,
                           CUSTOMRECORD_JJ_BAG_LOT_DETAILS.custrecord_jj_bag_core_material AS custrecord_jj_bag_core_material_join,
@@ -156,29 +179,35 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                           CUSTOMRECORD_JJ_BAG_LOT_DETAILS.custrecord_jj_quantity AS custrecord_jj_quantity,
                           CUSTOMRECORD_JJ_BAG_LOT_DETAILS.custrecord_jj_pieces AS custrecord_jj_pieces
                         FROM
-                          CUSTOMRECORD_JJ_BAG_LOT_DETAILS,
+                          CUSTOMRECORD_JJ_BAG_LOT_DETAILS
+                        LEFT JOIN
                           (SELECT
                             CUSTOMRECORD_JJ_BAGCORE_MATERIALS_0.ID AS id_0,
                             CUSTOMRECORD_JJ_BAGCORE_MATERIALS_0.ID AS id_join,
                             item_SUB.id_0 AS id_0_0
                           FROM
-                            CUSTOMRECORD_JJ_BAGCORE_MATERIALS CUSTOMRECORD_JJ_BAGCORE_MATERIALS_0,
+                            CUSTOMRECORD_JJ_BAGCORE_MATERIALS CUSTOMRECORD_JJ_BAGCORE_MATERIALS_0
+                          LEFT JOIN
                             (SELECT
                               item.ID AS ID,
                               item.ID AS id_join,
                               classification.ID AS id_0
                             FROM
-                              item,
+                              item
+                            LEFT JOIN
                               classification
-                            WHERE
-                              item.CLASS = classification.ID(+)
+                            ON
+                              item.CLASS = classification.ID
                             ) item_SUB
-                          WHERE
-                            CUSTOMRECORD_JJ_BAGCORE_MATERIALS_0.custrecord_jj_bagcoremat_item = item_SUB.ID(+)
+                          ON
+                            CUSTOMRECORD_JJ_BAGCORE_MATERIALS_0.custrecord_jj_bagcoremat_item = item_SUB.ID
                           ) CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB_0
-                        WHERE
-                          CUSTOMRECORD_JJ_BAG_LOT_DETAILS.custrecord_jj_bag_core_material = CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB_0.id_0(+)
-                        ) CUSTOMRECORD_JJ_BAG_LOT_DETAILS_SUB,
+                        ON
+                          CUSTOMRECORD_JJ_BAG_LOT_DETAILS.custrecord_jj_bag_core_material = CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB_0.id_0
+                        ) CUSTOMRECORD_JJ_BAG_LOT_DETAILS_SUB
+                      ON
+                        CUSTOMRECORD_JJ_BAGCORE_MATERIALS.ID = CUSTOMRECORD_JJ_BAG_LOT_DETAILS_SUB.custrecord_jj_bag_core_material
+                      LEFT JOIN
                         (SELECT
                           item_0.ID AS id_0,
                           item_0.ID AS id_join,
@@ -192,24 +221,28 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                           item_0.custitem_jj_stone_quality AS custitem_jj_stone_quality,
                           classification_SUB.id_join AS id_join_0
                         FROM
-                          item item_0,
+                          item item_0
+                        LEFT JOIN
                           (SELECT
                             classification_0.ID AS ID,
                             classification_0.ID AS id_join,
                             classification_1.ID AS id_0
                           FROM
-                            classification classification_0,
+                            classification classification_0
+                          LEFT JOIN
                             classification classification_1
-                          WHERE
-                            classification_0.PARENT = classification_1.ID(+)
+                          ON
+                            classification_0.PARENT = classification_1.ID
                           ) classification_SUB
-                        WHERE
-                          item_0.CLASS = classification_SUB.ID(+)
+                        ON
+                          item_0.CLASS = classification_SUB.ID
                         ) item_SUB_0
-                      WHERE
-                        CUSTOMRECORD_JJ_BAGCORE_MATERIALS.ID = CUSTOMRECORD_JJ_BAG_LOT_DETAILS_SUB.custrecord_jj_bag_core_material(+)
-                         AND CUSTOMRECORD_JJ_BAGCORE_MATERIALS.custrecord_jj_bagcoremat_item = item_SUB_0.id_0(+)
-                      ) CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB,
+                      ON
+                        CUSTOMRECORD_JJ_BAGCORE_MATERIALS.custrecord_jj_bagcoremat_item = item_SUB_0.id_0
+                      ) CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB
+                    ON
+                      CUSTOMRECORD_JJ_BAG_GENERATION.ID = CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_bag_name
+                    LEFT JOIN
                       (SELECT
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING.ID AS id_1,
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING.ID AS id_join,
@@ -253,9 +286,16 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_is_rejected AS custrecord_jj_bagcore_is_rejected_crit,
                         transaction_SUB.mainline_crit AS mainline_crit_0
                       FROM
-                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING,
-                        Customer,
-                        CUSTOMRECORD_JJ_SUB_CATEGORY,
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING
+                      LEFT JOIN
+                        Customer
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_customer = Customer.ID
+                      LEFT JOIN
+                        CUSTOMRECORD_JJ_SUB_CATEGORY
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_item_subcategory = CUSTOMRECORD_JJ_SUB_CATEGORY.ID
+                      LEFT JOIN
                         (SELECT
                           item_1.ID AS ID,
                           item_1.ID AS id_join,
@@ -267,14 +307,23 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                           CUSTOMRECORD_JJ_SUB_CATEGORY_0.custrecord_jj_sub_cate_types AS custrecord_jj_sub_cate_types,
                           item_1.custitem_jj_stock_type AS custitem_jj_stock_type
                         FROM
-                          item item_1,
-                          CUSTOMRECORD_JJ_CATEGORY,
+                          item item_1
+                        LEFT JOIN
+                          CUSTOMRECORD_JJ_CATEGORY
+                        ON
+                          item_1.custitem_jj_category = CUSTOMRECORD_JJ_CATEGORY.ID
+                        LEFT JOIN
                           CUSTOMRECORD_JJ_SUB_CATEGORY CUSTOMRECORD_JJ_SUB_CATEGORY_0
-                        WHERE
-                          item_1.custitem_jj_category = CUSTOMRECORD_JJ_CATEGORY.ID(+)
-                           AND item_1.custitem_jj_sub_category = CUSTOMRECORD_JJ_SUB_CATEGORY_0.ID(+)
-                        ) item_SUB_1,
-                        salesOrder,
+                        ON
+                          item_1.custitem_jj_sub_category = CUSTOMRECORD_JJ_SUB_CATEGORY_0.ID
+                        ) item_SUB_1
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_kt_col = item_SUB_1.ID
+                      LEFT JOIN
+                        salesOrder
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_so = salesOrder.ID
+                      LEFT JOIN
                         (SELECT
                           TRANSACTION.ID AS id_0,
                           TRANSACTION.ID AS id_join,
@@ -290,8 +339,12 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                           TRANSACTION.otherrefnum AS otherrefnum,
                           transactionLine.mainline AS mainline_crit
                         FROM
-                          TRANSACTION,
-                          employee,
+                          TRANSACTION
+                        LEFT JOIN
+                          employee
+                        ON
+                          TRANSACTION.employee = employee.ID
+                        LEFT JOIN
                           (SELECT
                             Customer_0.ID AS ID,
                             Customer_0.ID AS id_join,
@@ -299,24 +352,37 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                             employee_1.firstname AS firstname_0,
                             Customer_0.custentity_jj_entity_customer_code AS custentity_jj_entity_customer_code
                           FROM
-                            Customer Customer_0,
-                            employee employee_0,
+                            Customer Customer_0
+                          LEFT JOIN
+                            employee employee_0
+                          ON
+                            Customer_0.custentity1 = employee_0.ID
+                          LEFT JOIN
                             employee employee_1
-                          WHERE
-                            Customer_0.custentity1 = employee_0.ID(+)
-                             AND Customer_0.salesrep = employee_1.ID(+)
-                          ) Customer_SUB,
+                          ON
+                            Customer_0.salesrep = employee_1.ID
+                          ) Customer_SUB
+                        ON
+                          TRANSACTION.entity = Customer_SUB.ID
+                        JOIN
                           transactionLine
-                        WHERE
-                          ((TRANSACTION.employee = employee.ID(+) AND TRANSACTION.entity = Customer_SUB.ID(+)))
-                           AND TRANSACTION.ID = transactionLine.TRANSACTION
-                        ) transaction_SUB,
-                        TRANSACTION transaction_0,
+                        ON
+                          TRANSACTION.ID = transactionLine.TRANSACTION
+                        ) transaction_SUB
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_so = transaction_SUB.id_0
+                      LEFT JOIN
+                        TRANSACTION transaction_0
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_wo = transaction_0.ID
+                      LEFT JOIN
                         workOrder
-                      WHERE
-                        ((((((CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_customer = Customer.ID(+) AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_item_subcategory = CUSTOMRECORD_JJ_SUB_CATEGORY.ID(+)) AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_kt_col = item_SUB_1.ID(+)) AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_so = salesOrder.ID(+)) AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_so = transaction_SUB.id_0(+)) AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_wo = transaction_0.ID(+)))
-                         AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_wo = workOrder.ID(+)
-                      ) CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB,
+                      ON
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_wo = workOrder.ID
+                      ) CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB
+                    ON
+                      CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_bagcore = CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.id_1
+                    LEFT JOIN
                       (SELECT
                         CUSTOMRECORD_JJ_OPERATIONS.custrecord_jj_oprtns_bagno AS custrecord_jj_oprtns_bagno,
                         CUSTOMRECORD_JJ_OPERATIONS.custrecord_jj_oprtns_bagno AS custrecord_jj_oprtns_bagno_join,
@@ -325,55 +391,91 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                         CUSTOMRECORD_JJ_OPERATIONS.custrecord_jj_oprtns_entry AS custrecord_jj_oprtns_entry,
                         CUSTOMRECORD_JJ_OPERATIONS.custrecord_jj_oprtns_exit AS custrecord_jj_oprtns_exit_crit
                       FROM
-                        CUSTOMRECORD_JJ_OPERATIONS,
+                        CUSTOMRECORD_JJ_OPERATIONS
+                      LEFT JOIN
                         employee employee_2
-                      WHERE
-                        CUSTOMRECORD_JJ_OPERATIONS.custrecord_jj_oprtns_employee = employee_2.ID(+)
+                      ON
+                        CUSTOMRECORD_JJ_OPERATIONS.custrecord_jj_oprtns_employee = employee_2.ID
                       ) CUSTOMRECORD_JJ_OPERATIONS_SUB
+                    ON
+                      CUSTOMRECORD_JJ_BAG_GENERATION.ID = CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_bagno
                     WHERE
-                      (((CUSTOMRECORD_JJ_BAG_GENERATION.ID = CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_bag_name(+) AND CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_bagcore = CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.id_1(+)) AND CUSTOMRECORD_JJ_BAG_GENERATION.ID = CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_bagno(+)))
-                       AND ((NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_merge, 'F') = ? AND (NOT(
+                      (NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_merge, 'F') = ? AND (NOT(
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.status_crit IN ('WorkOrd:G', 'WorkOrd:C', 'WorkOrd:H')
-                      ) OR CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.status_crit IS NULL) AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.isinactive, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_split, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_is_rejected, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.isinactive_crit, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_is_rejected_crit, 'F') = ? AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.mainline_crit_0 = ? AND CASE WHEN CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_exit_crit IS NULL THEN 1 ELSE 0 END IN ('1')))
-                      ${rowLimitClause}
+                      ) OR CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.status_crit IS NULL) AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.isinactive, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_split, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_is_rejected, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.isinactive_crit, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_is_rejected_crit, 'F') = ? AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.mainline_crit_0 = ? AND CASE WHEN CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_exit_crit IS NULL THEN 1 ELSE 0 END IN ('1'))
+                      ${seekClause}
+                    ${orderAndFetchClause}
                 `;
 
             return { innerQuery, baseParams: ['F', 'F', 'F', 'F', 'F', 'F', 'T'] };
         };
 
         /**
-         * @param {number} page - 1-indexed page number.
+         * Keyset (seek) pagination over the Actual WIP Report.
+         *
+         * Instead of a page number, the caller passes the ID of the last row
+         * seen (cursorId) and a direction ('next' or 'prev'). NetSuite can seek
+         * directly to rows greater/less than that ID using the query's own
+         * ORDER BY + WHERE, instead of scanning/counting through every row
+         * before it -- which is what both OFFSET/FETCH and ROWNUM do, and why
+         * deeper pages kept getting slower. Every page therefore loads in
+         * roughly the same amount of time regardless of how far into the
+         * dataset it is.
+         *
          * @param {number} pageSize - number of rows per page.
-         * @returns {{data: Array<Object>, totalCount: number, page: number, pageSize: number, totalPages: number}}
+         * @param {number} [cursorId] - CUSTOMRECORD_JJ_BAG_GENERATION.ID of the
+         *   last row on the previous page (omit for the first page).
+         * @param {'next'|'prev'} [direction] - which way to seek from cursorId.
+         * @returns {{data: Array<Object>, hasNext: boolean, hasPrev: boolean,
+         *            totalCount?: number, totalPages?: number}}
          */
-        const getActualWIPReport = (page, pageSize) => {
+        const getActualWIPReport = (pageSize, cursorId, direction) => {
             try {
-                page = Number(page) > 0 ? Number(page) : 1;
                 pageSize = Number(pageSize) > 0 ? Number(pageSize) : 20;
-                const startRow = (page - 1) * pageSize + 1;
-                const endRow = page * pageSize;
+                cursorId = cursorId ? Number(cursorId) : null;
+                direction = direction === 'prev' ? 'prev' : 'next';
 
-                // ROWNUM <= endRow is injected directly into the query's own
-                // outermost WHERE (no extra subquery level, unlike the
-                // ROWNUM-wrap/OFFSET-FETCH approaches that broke NetSuite's
-                // internal paged-result fetch on this deeply nested query).
-                // This lets Oracle stop scanning once endRow rows are found,
-                // instead of materializing the full 100k-row result set on
-                // every page request. The last pageSize rows are then sliced
-                // off in JS since ROWNUM alone can't express "skip the first
-                // startRow-1 rows".
-                let { innerQuery: countQuery, baseParams: countBaseParams } = buildActualWIPInnerQuery(null, 'COUNT(*) AS total_count');
-                let countResult = runQuery(countQuery, 'getActualWIPReport_count', countBaseParams);
-                let totalCount = (countResult[0] && Number(countResult[0].total_count)) || 0;
+                // Only the very first request (no cursorId, i.e. initial page
+                // load) pays for a full COUNT(*) scan to report the total page
+                // count. Every subsequent Next/Previous call always carries a
+                // cursorId and skips this entirely, so keyset pagination speed
+                // is unaffected.
+                let totalCount = null;
+                let totalPages = null;
+                if (!cursorId) {
+                    let { innerQuery: countQuery, baseParams: countBaseParams } = buildActualWIPInnerQuery(null, 'COUNT(*) AS total_count');
+                    let countResult = runQuery(countQuery, 'getActualWIPReport_count', countBaseParams);
+                    totalCount = (countResult[0] && Number(countResult[0].total_count)) || 0;
+                    totalPages = Math.ceil(totalCount / pageSize);
+                }
 
-                let { innerQuery, baseParams } = buildActualWIPInnerQuery(endRow);
+                // Fetch one extra row beyond pageSize to know whether another
+                // page exists in the requested direction. The seek/order/fetch
+                // clauses are injected directly into the query's own top-level
+                // WHERE (see buildActualWIPInnerQuery) rather than wrapping it
+                // in another SELECT -- any extra subquery wrapping around this
+                // query reliably breaks NetSuite's paged-result fetch.
+                let { innerQuery: pagedQuery, baseParams } = buildActualWIPInnerQuery({ cursorId, direction, pageSize });
                 let params = baseParams.slice();
+                if (cursorId) { params.push(cursorId); }
 
-                let upToPageResults = runQuery(innerQuery, 'getActualWIPReport', params);
-                let rawResults = upToPageResults.slice(startRow - 1, endRow);
-                log.debug('getActualWIPReport - raw result count', rawResults.length);
+                let seekResults = runQuery(pagedQuery, 'getActualWIPReport', params);
 
-                let mappedResults = rawResults.map((row) => ({
+                let hasMore = seekResults.length > pageSize;
+                let pageResults = seekResults.slice(0, pageSize);
+                if (direction === 'prev') {
+                    // Rows were fetched in descending order to seek backwards;
+                    // restore ascending order for display.
+                    pageResults.reverse();
+                }
+
+                let hasNext = direction === 'next' ? hasMore : true;
+                let hasPrev = direction === 'prev' ? hasMore : Boolean(cursorId);
+
+                log.debug('getActualWIPReport - row count', pageResults.length);
+                
+                let mappedResults = pageResults.map((row) => ({
+                    bagGenerationId: row.bag_generation_id,
                     presentDepartment: row.present_department,
                     bagNumber: row.bag_name,
                     componentItems: row.component_item,
@@ -416,18 +518,20 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                     expectedNetWeightNew: row.expected_net_weight_new,
                     actualMetalPureWeight: row.actual_metal_pure_weight,
                 }));
-                log.debug('getActualWIPReport - mapped result count', mappedResults.length);
 
                 return {
                     data: mappedResults,
-                    totalCount: totalCount,
-                    page: page,
                     pageSize: pageSize,
-                    totalPages: Math.ceil(totalCount / pageSize),
+                    hasNext: hasNext,
+                    hasPrev: hasPrev,
+                    firstId: mappedResults.length ? mappedResults[0].bagGenerationId : null,
+                    lastId: mappedResults.length ? mappedResults[mappedResults.length - 1].bagGenerationId : null,
+                    totalCount: totalCount,
+                    totalPages: totalPages,
                 };
             } catch (error) {
                 log.error('Error @ getActualWIPReport', error);
-                return { data: [], totalCount: 0, page: page, pageSize: pageSize, totalPages: 0 };
+                return { data: [], pageSize: pageSize, hasNext: false, hasPrev: false, firstId: null, lastId: null, totalCount: null, totalPages: null };
             }
         };
 

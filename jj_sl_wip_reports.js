@@ -44,9 +44,10 @@ define(['N/file', '../Libraries/jj_cm_wip_utility.js', '../Models/jj_cm_wip_save
              * @returns {Object} Response with status, reason, and data.
              */
             actualwip(params) {
-                let page = params && params.page;
                 let pageSize = params && params.pageSize;
-                let result = wip_model.getActualWIPReport(page, pageSize);
+                let cursorId = params && params.cursorId;
+                let direction = params && params.direction;
+                let result = wip_model.getActualWIPReport(pageSize, cursorId, direction);
 
                 if (result && result.data && result.data.length) {
                     return {
