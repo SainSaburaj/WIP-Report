@@ -37,7 +37,7 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
             try {
                 if (!sqlQuery) { log.error('runQuery - ERROR: sqlQuery is null or undefined'); return []; }
                 const results = [];
-                const PAGE_SIZE = 1000;
+                const PAGE_SIZE = 500;
                 let pageIndex = 0;
                 let pagedData;
                 pagedData = query.runSuiteQLPaged({ query: sqlQuery, params: params || [], pageSize: PAGE_SIZE });
@@ -372,7 +372,6 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                 let upToPageResults = runQuery(innerQuery, 'getActualWIPReport', params);
                 let rawResults = upToPageResults.slice(startRow - 1, endRow);
                 log.debug('getActualWIPReport - raw result count', rawResults.length);
-                log.debug('getActualWIPReport - raw sample row', rawResults[0]);
 
                 let mappedResults = rawResults.map((row) => ({
                     presentDepartment: row.present_department,
@@ -418,7 +417,6 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                     actualMetalPureWeight: row.actual_metal_pure_weight,
                 }));
                 log.debug('getActualWIPReport - mapped result count', mappedResults.length);
-                log.debug('getActualWIPReport - mapped sample row', mappedResults[0]);
 
                 return {
                     data: mappedResults,

@@ -47,7 +47,6 @@ define(['N/file', '../Libraries/jj_cm_wip_utility.js', '../Models/jj_cm_wip_save
                 let page = params && params.page;
                 let pageSize = params && params.pageSize;
                 let result = wip_model.getActualWIPReport(page, pageSize);
-                log.debug("Actual WIP List", result);
 
                 if (result && result.data && result.data.length) {
                     return {
@@ -116,7 +115,6 @@ define(['N/file', '../Libraries/jj_cm_wip_utility.js', '../Models/jj_cm_wip_save
             * @returns {boolean}
             */
             sendResponse(responseObj) {
-                log.debug('responseObj', responseObj)
                 let returnVal;
                 const wrapInEscapedBody = (data) => {
                     return encodeURIComponent(JSON.stringify(data));

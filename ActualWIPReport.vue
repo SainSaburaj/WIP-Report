@@ -5,7 +5,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between mb-6">
                 <div>
-                    <h1 class="text-xl font-semibold text-gray-800">Actual WIP Report</h1>
+                    <h1 class="text-xl font-bold text-gray-800">Actual WIP Report</h1>
                 </div>
                 <div class="flex items-center gap-2 relative">
                     <button @click="toggleDropdown" class="bg-white border border-gray-300 text-gray-600 hover:text-black hover:border-gray-400 rounded-md px-3 py-2 text-sm shadow-sm">
@@ -32,17 +32,9 @@
                         <span class="flex items-center">
                             <i class="fas fa-table mr-2 text-table-600"></i>WIP Data
                         </span>
-                        <span class="text-xs font-normal text-gray-500">
-                            Page {{ currentPage }} of
-                            <span v-if="loading" class="inline-block w-8 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
-                            <template v-else>{{ totalPages || 1 }}</template>
-                            &middot;
-                            <span v-if="loading" class="inline-block w-14 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
-                            <template v-else>{{ totalCount }} records</template>
-                        </span>
                     </h2>
                     <div class="table-main bg-white rounded-lg border border-gray-200 shadow-sm overflow-auto">
-                        <table class="w-full text-[12px] whitespace-nowrap">
+                        <table class="w-full whitespace-nowrap">
                             <thead>
                                 <tr class="bg-gray-700 text-white text-[12px] uppercase tracking-wide">
                                     <th class="frozen-col px-4 py-2 text-left font-medium bg-gray-700">Present Department</th>
@@ -97,47 +89,47 @@
                             </tbody>
                             <tbody v-else class="divide-y divide-gray-100">
                                 <tr v-for="(row, index) in filteredData" :key="index" class="hover:bg-gray-50">
-                                    <td class="frozen-col px-4 py-1.5 text-gray-600 bg-white">{{ row.presentDepartment }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.bagNumber }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.componentItems }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.stoneQualityGroup }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.manufacturer }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.poNumber }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.salesOrderNo }}</td>
-                                    <td class="px-4 py-1.5 font-medium text-gray-700">{{ row.workorder }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.salesExecutive }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.orderDate }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.woAgeing }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.lastMoveDays }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.orderRemarks }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.overDueDays }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.orderType }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.stockType }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.orderedQuantity }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.bagGenerationDate }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.noOfBags }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.quantityPerBag }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.customerName }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.deliveryDate }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.design }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.category }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.categoryCode }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.subCategory }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.productionDelays }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.issueDate }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.ringSize }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.metalStoneQuality }}</td>
-                                    <td class="px-4 py-1.5 text-gray-600">{{ row.metalStoneColor }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.partyDiamondWeight }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.actualDiamondWeightCt }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.lotMetalIssueDays }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.expectedDiamondPiecesNew }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.expectedDiamondWeightTest }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.expectedDiamondWeight }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.expectedGrossWeightNew }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.expectedMetalPureWeight }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.expectedNetWeightNew }}</td>
-                                    <td class="px-4 py-1.5 text-right text-gray-700">{{ row.actualMetalPureWeight }}</td>
+                                    <td class="frozen-col px-4 py-1.5 text-gray-900 bg-white">{{ row.presentDepartment }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.bagNumber }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.componentItems }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.stoneQualityGroup }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.manufacturer }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.poNumber }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.salesOrderNo }}</td>
+                                    <td class="px-4 py-1.5 font-medium text-gray-900">{{ row.workorder }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.salesExecutive }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.orderDate }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.woAgeing }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.lastMoveDays }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.orderRemarks }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.overDueDays }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.orderType }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.stockType }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.orderedQuantity }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.bagGenerationDate }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.noOfBags }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.quantityPerBag }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.customerName }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.deliveryDate }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.design }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.category }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.categoryCode }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.subCategory }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.productionDelays }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.issueDate }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.ringSize }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.metalStoneQuality }}</td>
+                                    <td class="px-4 py-1.5 text-gray-900">{{ row.metalStoneColor }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.partyDiamondWeight }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.actualDiamondWeightCt }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.lotMetalIssueDays }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.expectedDiamondPiecesNew }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.expectedDiamondWeightTest }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.expectedDiamondWeight }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.expectedGrossWeightNew }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.expectedMetalPureWeight }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.expectedNetWeightNew }}</td>
+                                    <td class="px-4 py-1.5 text-right text-gray-900">{{ row.actualMetalPureWeight }}</td>
                                 </tr>
                                 <tr v-if="filteredData.length === 0">
                                     <td colspan="39" class="px-4 py-8 text-center text-gray-500">
@@ -172,7 +164,14 @@
                                 Next <i class="fas fa-angle-right"></i>
                             </button>
                         </div>
-                        <span class="text-xs font-normal text-gray-500">Page {{ currentPage }} of {{ totalPages || 1 }} &middot; {{ totalCount }} records</span>
+                        <span class="text-xs font-normal text-gray-500">
+                            Page {{ currentPage }} of
+                            <span v-if="loading" class="inline-block w-8 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
+                            <template v-else>{{ totalPages || 1 }}</template>
+                            &middot;
+                            <span v-if="loading" class="inline-block w-14 h-3 bg-gray-200 rounded animate-pulse align-middle"></span>
+                            <template v-else>{{ totalCount }} records</template>
+                        </span>
                     </div>
                 </div>
             </div>
@@ -186,7 +185,7 @@ import { useToast } from "vue-toast-notification";
 import * as XLSX from 'xlsx';
 import { useAllReportsApi } from '../services/NetSuite_API';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 500;
 
 export default {
     name: 'ActualWIPReport',
@@ -435,6 +434,7 @@ body{
 .table-main {
     height: 630px !important;
     overflow: auto;
+    font-size: 11px;
 }
 
 .table-main thead th {
