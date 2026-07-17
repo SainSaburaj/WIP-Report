@@ -66,12 +66,15 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
          * @param {number} [rowLimit] - when set, adds "AND ROWNUM <= rowLimit"
          *   to the query's own outermost WHERE (no extra subquery level), so
          *   NetSuite can stop scanning early on very large datasets.
+         * @param {string} [selectOverride] - when set, replaces the full SELECT
+         *   column list with this raw SQL (e.g. "COUNT(*) AS total_count") so a
+         *   COUNT/aggregate query can share the exact same FROM/WHERE/joins
+         *   without adding any extra subquery wrapping level.
          * @returns {{innerQuery: string, baseParams: Array<string>}}
          */
-        const buildActualWIPInnerQuery = (rowLimit) => {
+        const buildActualWIPInnerQuery = (rowLimit, selectOverride) => {
             let rowLimitClause = rowLimit ? `AND ROWNUM <= ${Number(rowLimit)}` : '';
-            let innerQuery = `
-                    SELECT
+            let selectList = selectOverride || `
                       BUILTIN_RESULT.TYPE_INTEGER(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_so) AS custrecord_jj_bagcore_so,
                       BUILTIN_RESULT.TYPE_STRING(CASE WHEN CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_exit IS NULL THEN CUSTOMRECORD_JJ_OPERATIONS_SUB.firstname END) AS manufacturer,
                       BUILTIN_RESULT.TYPE_STRING(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.firstname_0_0) AS sales_executive,
@@ -117,6 +120,10 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                       BUILTIN_RESULT.TYPE_FLOAT(NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN 0.75 * CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0)) AS expected_metal_pure_weight,
                       BUILTIN_RESULT.TYPE_FLOAT(NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0)) AS expected_net_weight_new,
                       BUILTIN_RESULT.TYPE_STRING(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.memo_1) AS so_memo_2
+            `;
+            let innerQuery = `
+                    SELECT
+                      ${selectList}
                     FROM
                       CUSTOMRECORD_JJ_BAG_GENERATION,
                       (SELECT
@@ -355,8 +362,7 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                 // every page request. The last pageSize rows are then sliced
                 // off in JS since ROWNUM alone can't express "skip the first
                 // startRow-1 rows".
-                let { innerQuery: countInnerQuery, baseParams: countBaseParams } = buildActualWIPInnerQuery();
-                let countQuery = `SELECT COUNT(*) AS total_count FROM (${countInnerQuery})`;
+                let { innerQuery: countQuery, baseParams: countBaseParams } = buildActualWIPInnerQuery(null, 'COUNT(*) AS total_count');
                 let countResult = runQuery(countQuery, 'getActualWIPReport_count', countBaseParams);
                 let totalCount = (countResult[0] && Number(countResult[0].total_count)) || 0;
 
