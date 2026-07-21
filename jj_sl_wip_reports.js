@@ -47,7 +47,16 @@ define(['N/file', '../Libraries/jj_cm_wip_utility.js', '../Models/jj_cm_wip_save
                 let pageSize = params && params.pageSize;
                 let cursorId = params && params.cursorId;
                 let direction = params && params.direction;
-                let result = wip_model.getActualWIPReport(pageSize, cursorId, direction);
+                let filters = {
+                    location: params && params.location,
+                    department: params && params.department,
+                    dateFrom: params && params.dateFrom,
+                    dateTo: params && params.dateTo,
+                    salesOrderNo: params && params.salesOrderNo,
+                    workOrderNo: params && params.workOrderNo,
+                    bagNumber: params && params.bagNumber,
+                };
+                let result = wip_model.getActualWIPReport(pageSize, cursorId, direction, filters);
 
                 if (result && result.data && result.data.length) {
                     return {
@@ -61,6 +70,89 @@ define(['N/file', '../Libraries/jj_cm_wip_utility.js', '../Models/jj_cm_wip_save
                     status: "ERROR",
                     reason: jjUtil.ERROR_STACK.length ? "ERROR" : "NO_ACTUAL_WIP_FOUND",
                     data: result || null,
+                };
+            },
+
+            /**
+             * Retrieves the department-level SUMMARY of the Actual WIP Report
+             * (one row per department + location, quantity/weight columns
+             * SUMmed). This is what the frontend loads initially instead of the
+             * full detail set. Accepts the same filters as `actualwip`.
+             * @returns {Object} Response with status, reason, and data.
+             */
+            actualwipsummary(params) {
+                let filters = {
+                    location: params && params.location,
+                    department: params && params.department,
+                    dateFrom: params && params.dateFrom,
+                    dateTo: params && params.dateTo,
+                    salesOrderNo: params && params.salesOrderNo,
+                    workOrderNo: params && params.workOrderNo,
+                    bagNumber: params && params.bagNumber,
+                };
+                let result = wip_model.getActualWIPSummary(filters);
+
+                if (result && result.data && result.data.length) {
+                    return {
+                        status: "SUCCESS",
+                        reason: "ACTUAL_WIP_SUMMARY_LISTED",
+                        data: result,
+                    };
+                }
+
+                return {
+                    status: "ERROR",
+                    reason: jjUtil.ERROR_STACK.length ? "ERROR" : "NO_ACTUAL_WIP_FOUND",
+                    data: result || { data: [] },
+                };
+            },
+
+            /**
+             * Retrieves the full detail rows for a SINGLE department (on-demand
+             * expansion of one summary row). `department` names the department
+             * to expand; the remaining filters keep the expansion scoped to the
+             * currently active report filters.
+             * @returns {Object} Response with status, reason, and data.
+             */
+            actualwipdepartmentdetail(params) {
+                let department = params && params.department;
+                let filters = {
+                    location: params && params.location,
+                    dateFrom: params && params.dateFrom,
+                    dateTo: params && params.dateTo,
+                    salesOrderNo: params && params.salesOrderNo,
+                    workOrderNo: params && params.workOrderNo,
+                    bagNumber: params && params.bagNumber,
+                };
+                let result = wip_model.getActualWIPDepartmentDetail(department, filters);
+
+                if (result && result.data && result.data.length) {
+                    return {
+                        status: "SUCCESS",
+                        reason: "ACTUAL_WIP_DEPARTMENT_DETAIL_LISTED",
+                        data: result,
+                    };
+                }
+
+                return {
+                    status: "ERROR",
+                    reason: jjUtil.ERROR_STACK.length ? "ERROR" : "NO_ACTUAL_WIP_FOUND",
+                    data: result || { data: [] },
+                };
+            },
+
+            /**
+             * Retrieves the active manufacturing departments (each joined to
+             * its active location) that back the Location and Department
+             * filter dropdowns.
+             * @returns {Object} Response with status, reason, and data.
+             */
+            manufacturingdepartments() {
+                let result = wip_model.getManufacturingDepartments();
+                return {
+                    status: "SUCCESS",
+                    reason: "MANUFACTURING_DEPARTMENTS_LISTED",
+                    data: result || [],
                 };
             },
 
@@ -106,6 +198,12 @@ define(['N/file', '../Libraries/jj_cm_wip_utility.js', '../Models/jj_cm_wip_save
                             return "";
                         case "actualwip":
                             return apiMethods.actualwip(this.parameters);
+                        case "actualwipsummary":
+                            return apiMethods.actualwipsummary(this.parameters);
+                        case "actualwipdepartmentdetail":
+                            return apiMethods.actualwipdepartmentdetail(this.parameters);
+                        case "manufacturingdepartments":
+                            return apiMethods.manufacturingdepartments();
                         default:
                             return { status: 'ERROR', reason: 'INVALID_APITYPE', data: null };
                     }

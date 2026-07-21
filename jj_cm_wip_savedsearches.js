@@ -58,6 +58,26 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
             }
         };
 
+        // Non-paged SuiteQL runner. Used ONLY for the department summary
+        // (GROUP BY aggregate) query. NetSuite's runSuiteQLPaged reliably
+        // throws UNEXPECTED_ERROR while fetching page 0 of this specific
+        // join once a GROUP BY is added -- paged fetch depends on stable
+        // per-row cursoring that an aggregated result set doesn't have.
+        // Plain (non-paged) runSuiteQL executes the identical SQL without
+        // issue. Safe here because the summary result is tiny (one row per
+        // department), far under the single-call row cap.
+        const runQueryUnpaged = (sqlQuery, queryName, params) => {
+            queryName = queryName || 'UnnamedQuery';
+            try {
+                if (!sqlQuery) { log.error('runQueryUnpaged - ERROR: sqlQuery is null or undefined'); return []; }
+                let resultSet = query.runSuiteQL({ query: sqlQuery, params: params || [] });
+                return resultSet ? resultSet.asMappedResults() : [];
+            } catch (error) {
+                log.error('runQueryUnpaged - Error in ' + queryName, error);
+                return [];
+            }
+        };
+
         /**
          * Builds the shared inner SELECT (Actual WIP source data, unfiltered,
          * unpaged) plus its fixed positional params. Reused by both the report
@@ -81,22 +101,62 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
          * @param {string} [selectOverride] - when set, replaces the full SELECT
          *   column list with this raw SQL (e.g. "COUNT(*) AS total_count") so a
          *   COUNT/aggregate query can share the exact same FROM/WHERE/joins.
+         * @param {{location?: string, department?: string, dateFrom?: string,
+         *   dateTo?: string, salesOrderNo?: string, workOrderNo?: string,
+         *   bagNumber?: string}} [filters] - optional user-supplied filters,
+         *   appended to the WHERE clause as additional AND conditions with
+         *   bound params (never string-concatenated into the SQL itself).
          * @returns {{innerQuery: string, baseParams: Array<string>}}
          */
-        const buildActualWIPInnerQuery = (seek, selectOverride) => {
+        const buildActualWIPInnerQuery = (seek, selectOverride, filters) => {
             seek = seek || {};
+            filters = filters || {};
             let seekClause = '';
+            
             if (seek.cursorId) {
                 seekClause = seek.direction === 'prev'
                     ? 'AND CUSTOMRECORD_JJ_BAG_GENERATION.ID < ?'
                     : 'AND CUSTOMRECORD_JJ_BAG_GENERATION.ID > ?';
             }
+            let filterClauses = [];
+            let filterParams = [];
+            if (filters.location) {
+                filterClauses.push("AND BUILTIN.DF(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_location) = ?");
+                filterParams.push(filters.location);
+            }
+            if (filters.department) {
+                filterClauses.push("AND BUILTIN.DF(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_present_dept) = ?");
+                filterParams.push(filters.department);
+            }
+            if (filters.dateFrom) {
+                filterClauses.push("AND TRUNC(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_order_date) >= TO_DATE(?, 'YYYY-MM-DD')");
+                filterParams.push(filters.dateFrom);
+            }
+            if (filters.dateTo) {
+                filterClauses.push("AND TRUNC(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_order_date) <= TO_DATE(?, 'YYYY-MM-DD')");
+                filterParams.push(filters.dateTo);
+            }
+            if (filters.salesOrderNo) {
+                filterClauses.push("AND UPPER(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.tranid_0) LIKE UPPER(?)");
+                filterParams.push('%' + filters.salesOrderNo + '%');
+            }
+            if (filters.workOrderNo) {
+                filterClauses.push("AND UPPER(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.tranid_1) LIKE UPPER(?)");
+                filterParams.push('%' + filters.workOrderNo + '%');
+            }
+            if (filters.bagNumber) {
+                filterClauses.push("AND UPPER(CUSTOMRECORD_JJ_BAG_GENERATION.name) LIKE UPPER(?)");
+                filterParams.push('%' + filters.bagNumber + '%');
+            }
             let orderAndFetchClause = seek.pageSize
                 ? `ORDER BY CUSTOMRECORD_JJ_BAG_GENERATION.ID ${seek.direction === 'prev' ? 'DESC' : 'ASC'} FETCH NEXT ${Number(seek.pageSize) + 1} ROWS ONLY`
-                : '';
+                : (seek.orderOnly
+                    ? 'ORDER BY CUSTOMRECORD_JJ_BAG_GENERATION.ID ASC'
+                    : '');
             let selectList = selectOverride || `
                       BUILTIN_RESULT.TYPE_INTEGER(CUSTOMRECORD_JJ_BAG_GENERATION.ID) AS bag_generation_id,
                       BUILTIN_RESULT.TYPE_INTEGER(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_so) AS custrecord_jj_bagcore_so,
+                      BUILTIN_RESULT.TYPE_STRING(BUILTIN.DF(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_location)) AS location,
                       BUILTIN_RESULT.TYPE_STRING(CASE WHEN CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_exit IS NULL THEN CUSTOMRECORD_JJ_OPERATIONS_SUB.firstname END) AS manufacturer,
                       BUILTIN_RESULT.TYPE_STRING(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.firstname_0_0) AS sales_executive,
                       BUILTIN_RESULT.TYPE_STRING(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.tranid_0) AS so_tranid,
@@ -247,6 +307,7 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING.ID AS id_1,
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING.ID AS id_join,
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_so AS custrecord_jj_bagcore_so,
+                        CUSTOMRECORD_JJ_BAG_CORE_TRACKING.custrecord_jj_bagcore_location AS custrecord_jj_bagcore_location,
                         transaction_SUB.firstname_0 AS firstname_0_0,
                         transaction_SUB.enddate AS enddate_0,
                         transaction_SUB.firstname_0_0 AS firstname_0_0_0,
@@ -403,11 +464,13 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                       (NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_merge, 'F') = ? AND (NOT(
                         CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.status_crit IN ('WorkOrd:G', 'WorkOrd:C', 'WorkOrd:H')
                       ) OR CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.status_crit IS NULL) AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.isinactive, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_split, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_is_rejected, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.isinactive_crit, 'F') = ? AND NVL(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_is_rejected_crit, 'F') = ? AND CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.mainline_crit_0 = ? AND CASE WHEN CUSTOMRECORD_JJ_OPERATIONS_SUB.custrecord_jj_oprtns_exit_crit IS NULL THEN 1 ELSE 0 END IN ('1'))
+                      ${filterClauses.join(' ')}
                       ${seekClause}
+                    ${seek.groupByClause || ''}
                     ${orderAndFetchClause}
                 `;
 
-            return { innerQuery, baseParams: ['F', 'F', 'F', 'F', 'F', 'F', 'T'] };
+            return { innerQuery, baseParams: ['F', 'F', 'F', 'F', 'F', 'F', 'T'].concat(filterParams) };
         };
 
         /**
@@ -426,14 +489,18 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
          * @param {number} [cursorId] - CUSTOMRECORD_JJ_BAG_GENERATION.ID of the
          *   last row on the previous page (omit for the first page).
          * @param {'next'|'prev'} [direction] - which way to seek from cursorId.
+         * @param {{location?: string, department?: string, dateFrom?: string,
+         *   dateTo?: string, salesOrderNo?: string, workOrderNo?: string,
+         *   bagNumber?: string}} [filters] - optional user-supplied filters.
          * @returns {{data: Array<Object>, hasNext: boolean, hasPrev: boolean,
          *            totalCount?: number, totalPages?: number}}
          */
-        const getActualWIPReport = (pageSize, cursorId, direction) => {
+        const getActualWIPReport = (pageSize, cursorId, direction, filters) => {
             try {
                 pageSize = Number(pageSize) > 0 ? Number(pageSize) : 20;
                 cursorId = cursorId ? Number(cursorId) : null;
                 direction = direction === 'prev' ? 'prev' : 'next';
+                filters = filters || {};
 
                 // Only the very first request (no cursorId, i.e. initial page
                 // load) pays for a full COUNT(*) scan to report the total page
@@ -443,7 +510,7 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                 let totalCount = null;
                 let totalPages = null;
                 if (!cursorId) {
-                    let { innerQuery: countQuery, baseParams: countBaseParams } = buildActualWIPInnerQuery(null, 'COUNT(*) AS total_count');
+                    let { innerQuery: countQuery, baseParams: countBaseParams } = buildActualWIPInnerQuery(null, 'COUNT(*) AS total_count', filters);
                     let countResult = runQuery(countQuery, 'getActualWIPReport_count', countBaseParams);
                     totalCount = (countResult[0] && Number(countResult[0].total_count)) || 0;
                     totalPages = Math.ceil(totalCount / pageSize);
@@ -455,7 +522,7 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                 // WHERE (see buildActualWIPInnerQuery) rather than wrapping it
                 // in another SELECT -- any extra subquery wrapping around this
                 // query reliably breaks NetSuite's paged-result fetch.
-                let { innerQuery: pagedQuery, baseParams } = buildActualWIPInnerQuery({ cursorId, direction, pageSize });
+                let { innerQuery: pagedQuery, baseParams } = buildActualWIPInnerQuery({ cursorId, direction, pageSize }, null, filters);
                 let params = baseParams.slice();
                 if (cursorId) { params.push(cursorId); }
 
@@ -476,6 +543,7 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
                 
                 let mappedResults = pageResults.map((row) => ({
                     bagGenerationId: row.bag_generation_id,
+                    location: row.location,
                     presentDepartment: row.present_department,
                     bagNumber: row.bag_name,
                     componentItems: row.component_item,
@@ -535,7 +603,271 @@ define(['N/query', '../Libraries/jj_cm_wip_utility.js'],
             }
         };
 
-        const wipModel = { getActualWIPReport };
+        /**
+         * Department-level summary of the Actual WIP Report.
+         *
+         * Returns ONE row per (present department + location), with all the
+         * quantity/weight columns SUMmed across every detail row belonging to
+         * that department, and every text/day-count column left blank. This is
+         * what the frontend shows on initial page load -- a compact summary of
+         * ~10-50 rows instead of tens of thousands of detail rows -- and each
+         * summary row can then be expanded on demand via
+         * getActualWIPDepartmentDetail (a separate, filtered detail call).
+         *
+         * IMPLEMENTATION NOTE ON QUERY SAFETY:
+         * This does NOT wrap the detail query in an outer SELECT. Both
+         * runSuiteQLPaged and runSuiteQL throw UNEXPECTED_ERROR when this
+         * deeply-nested join query is wrapped as a subquery (confirmed at
+         * runtime). Instead the aggregation is done IN PLACE: the detail
+         * SELECT's column list is replaced with SUM()/COUNT() aggregate
+         * expressions (via buildActualWIPInnerQuery's selectOverride) and a
+         * GROUP BY is appended to that same query's own top-level clause (via
+         * the seek.groupByClause hook). This keeps the exact query shape the
+         * report already runs successfully, only turning per-row columns into
+         * per-department aggregates. No FETCH, no seek, no subquery wrap.
+         *
+         * It is still executed via runQueryUnpaged (query.runSuiteQL, not
+         * runSuiteQLPaged) -- paged fetch throws UNEXPECTED_ERROR while
+         * fetching page 0 of this join once GROUP BY is added (confirmed at
+         * runtime), even without a subquery wrap; paged fetch appears to
+         * depend on per-row cursoring that an aggregated result set doesn't
+         * have. Plain runSuiteQL executes the identical SQL fine, and the
+         * summary result (one row per department) is far too small to need
+         * paging.
+         *
+         * @param {{location?: string, department?: string, dateFrom?: string,
+         *   dateTo?: string, salesOrderNo?: string, workOrderNo?: string,
+         *   bagNumber?: string}} [filters] - same optional filters as the
+         *   detail report; applied inside the inner query before aggregation.
+         * @returns {{data: Array<Object>}}
+         */
+        const getActualWIPSummary = (filters) => {
+            try {
+                filters = filters || {};
+
+                // IMPORTANT: aggregate INSIDE the same single query the detail
+                // report uses -- do NOT wrap it in an outer SELECT. Both
+                // runSuiteQLPaged AND runSuiteQL throw UNEXPECTED_ERROR when
+                // this deeply-nested join query is wrapped in a subquery. So
+                // instead of `SELECT ... FROM (innerQuery) GROUP BY ...`, we
+                // replace the inner SELECT column list with aggregate
+                // expressions (selectOverride) and append a GROUP BY to the
+                // inner query's own top-level clause (groupByClause). This is
+                // the exact query shape that already works for the report,
+                // just with SUM()/GROUP BY instead of per-row columns.
+                //
+                // The aggregate expressions are the SAME raw table expressions
+                // used per-row in the detail SELECT (see buildActualWIPInnerQuery)
+                // -- they must reference raw columns, not the per-row aliases,
+                // because there is no subquery to expose those aliases.
+                let deptExpr = "BUILTIN.DF(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_present_dept)";
+                let locExpr = "BUILTIN.DF(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_location)";
+
+                let aggregateSelect = `
+                      BUILTIN_RESULT.TYPE_STRING(${deptExpr}) AS present_department,
+                      BUILTIN_RESULT.TYPE_STRING(${locExpr}) AS location,
+                      BUILTIN_RESULT.TYPE_INTEGER(COUNT(*)) AS detail_count,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(CASE WHEN REGEXP_LIKE(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_qty, '^[0-9]+(\\.[0-9]+)?$') THEN TO_NUMBER(CUSTOMRECORD_JJ_BAG_CORE_TRACKING_SUB.custrecord_jj_bagcore_qty) ELSE 0 END)) AS ordered_quantity,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(CASE WHEN CUSTOMRECORD_JJ_BAG_GENERATION.name IS NOT NULL THEN 1 ELSE 0 END)) AS no_of_bags,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(NVL(CUSTOMRECORD_JJ_BAG_GENERATION.custrecord_jj_baggen_qty, 0))) AS quantity_per_bag,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(CASE WHEN BUILTIN.DF(CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0) = 'Diamond' AND BUILTIN.DF(CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custitem_jj_stone_quality_group_0) = 'PARTY DIAMOND QUALITY' THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_quantity_0 ELSE 0 END)) AS party_diamond_weight,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(CASE WHEN BUILTIN.DF(CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0) = 'Diamond' THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_quantity_0 ELSE 0 END)) AS actual_diamond_weight_ct,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(CASE WHEN BUILTIN.DF(CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0) = 'Diamond' THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_pieces_0 ELSE 0 END)) AS expected_diamond_pieces_new,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_join_0_0 = 6 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0))) AS expected_diamond_weight_test,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM((CASE WHEN BUILTIN.DF(CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0) = 'Diamond' THEN 0.2 * CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_quantity_0 ELSE 0 END + CASE WHEN BUILTIN.DF(CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0) = 'Colour Stone' THEN 0.2 * CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_quantity_0 ELSE 0 END) + CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_quantity_0 ELSE 0 END)) AS expected_diamond_weight,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM((NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0) + NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0 = 6 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN 0.2 * CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0)) + NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.class_0 = 7 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN 0.2 * CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0))) AS expected_gross_weight_new,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN 0.75 * CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0))) AS expected_metal_pure_weight,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(NVL(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 AND (CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line = 'F' OR CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_newly_add_line IS NULL) THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_bagcoremat_qty END, 0))) AS expected_net_weight_new,
+                      BUILTIN_RESULT.TYPE_FLOAT(SUM(CASE WHEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.id_0_0_1 = 5 THEN CUSTOMRECORD_JJ_BAGCORE_MATERIALS_SUB.custrecord_jj_quantity_0 ELSE 0 END)) AS actual_metal_pure_weight
+                `;
+
+                let groupByClause = `GROUP BY ${deptExpr}, ${locExpr} ORDER BY ${locExpr}, ${deptExpr}`;
+
+                let { innerQuery, baseParams } = buildActualWIPInnerQuery(
+                    { groupByClause }, aggregateSelect, filters
+                );
+
+                let results = runQueryUnpaged(innerQuery, 'getActualWIPSummary', baseParams);
+
+                // ordered_quantity is TYPE_STRING in the inner SELECT (it is a
+                // free-text field on the source record), so SUM() coerces it;
+                // NVL guards nulls. Round the float sums to a sane precision so
+                // the summary doesn't show 15-digit floating point noise.
+                let round = (v) => {
+                    let n = Number(v);
+                    if (!isFinite(n)) { return 0; }
+                    return Math.round(n * 1000) / 1000;
+                };
+
+                let mappedResults = results.map((row) => ({
+                    location: row.location,
+                    presentDepartment: row.present_department,
+                    detailCount: Number(row.detail_count) || 0,
+                    orderedQuantity: round(row.ordered_quantity),
+                    noOfBags: round(row.no_of_bags),
+                    quantityPerBag: round(row.quantity_per_bag),
+                    partyDiamondWeight: round(row.party_diamond_weight),
+                    actualDiamondWeightCt: round(row.actual_diamond_weight_ct),
+                    expectedDiamondPiecesNew: round(row.expected_diamond_pieces_new),
+                    expectedDiamondWeightTest: round(row.expected_diamond_weight_test),
+                    expectedDiamondWeight: round(row.expected_diamond_weight),
+                    expectedGrossWeightNew: round(row.expected_gross_weight_new),
+                    expectedMetalPureWeight: round(row.expected_metal_pure_weight),
+                    expectedNetWeightNew: round(row.expected_net_weight_new),
+                    actualMetalPureWeight: round(row.actual_metal_pure_weight),
+                }));
+
+                return { data: mappedResults };
+            } catch (error) {
+                log.error('Error @ getActualWIPSummary', error);
+                return { data: [] };
+            }
+        };
+
+        /**
+         * Full detail rows for a single department (used when the user expands
+         * one department summary row). Reuses the exact same detail query as
+         * getActualWIPReport, but forces the `department` filter to the given
+         * department name so only that department's rows come back. Location is
+         * also passed through (a department name can, in principle, exist under
+         * more than one location) to keep the expansion scoped to the summary
+         * row that was clicked.
+         *
+         * This is intentionally a separate on-demand call: expanding every
+         * department at once would pull the entire dataset into the page and
+         * risk crashing the browser, which is exactly what the summary+expand
+         * design avoids.
+         *
+         * @param {string} department - present department display name to expand.
+         * @param {{location?: string, dateFrom?: string, dateTo?: string,
+         *   salesOrderNo?: string, workOrderNo?: string, bagNumber?: string}}
+         *   [filters] - the other active report filters (department is
+         *   overridden with the expanded department).
+         * @returns {{data: Array<Object>}}
+         */
+        const getActualWIPDepartmentDetail = (department, filters) => {
+            try {
+                filters = filters || {};
+                // Force the department filter to the expanded department, keep
+                // every other active filter as-is.
+                let scopedFilters = {
+                    location: filters.location,
+                    department: department,
+                    dateFrom: filters.dateFrom,
+                    dateTo: filters.dateTo,
+                    salesOrderNo: filters.salesOrderNo,
+                    workOrderNo: filters.workOrderNo,
+                    bagNumber: filters.bagNumber,
+                };
+
+                // No seek/fetch: return all detail rows for this one
+                // department. A single department's row count is a small
+                // fraction of the whole report, so it is safe to return
+                // unpaged.
+                let { innerQuery, baseParams } = buildActualWIPInnerQuery(
+                    { orderOnly: true }, null, scopedFilters
+                );
+
+                let results = runQuery(innerQuery, 'getActualWIPDepartmentDetail', baseParams);
+
+                let mappedResults = results.map((row) => ({
+                    bagGenerationId: row.bag_generation_id,
+                    location: row.location,
+                    presentDepartment: row.present_department,
+                    bagNumber: row.bag_name,
+                    componentItems: row.component_item,
+                    stoneQualityGroup: row.stone_quality_group,
+                    manufacturer: row.manufacturer,
+                    poNumber: row.po_number,
+                    salesOrderNo: row.so_tranid,
+                    workorder: row.wo_tranid,
+                    salesExecutive: row.sales_executive,
+                    orderDate: row.order_date,
+                    woAgeing: row.wo_ageing,
+                    lastMoveDays: row.last_move_days,
+                    orderRemarks: row.so_memo_1 || row.so_memo_2,
+                    overDueDays: row.overdue_days,
+                    orderType: row.order_type,
+                    stockType: row.stock_type,
+                    orderedQuantity: row.ordered_quantity,
+                    bagGenerationDate: row.bag_generation_date,
+                    noOfBags: row.no_of_bags,
+                    quantityPerBag: row.quantity_per_bag,
+                    customerName: row.customer_name || row.companyname,
+                    deliveryDate: row.delivery_date,
+                    design: row.design,
+                    category: row.category,
+                    categoryCode: row.category_code,
+                    subCategory: row.sub_category,
+                    productionDelays: row.production_delay,
+                    issueDate: row.created,
+                    ringSize: row.ring_size,
+                    metalStoneQuality: row.metal_stone_quality,
+                    metalStoneColor: row.metal_stone_color,
+                    partyDiamondWeight: row.party_diamond_weight,
+                    actualDiamondWeightCt: row.actual_diamond_weight_ct,
+                    lotMetalIssueDays: row.lot_metal_issue_days,
+                    expectedDiamondPiecesNew: row.expected_diamond_pieces_new,
+                    expectedDiamondWeightTest: row.expected_diamond_weight_test,
+                    expectedDiamondWeight: row.expected_diamond_weight,
+                    expectedGrossWeightNew: row.expected_gross_weight_new,
+                    expectedMetalPureWeight: row.expected_metal_pure_weight,
+                    expectedNetWeightNew: row.expected_net_weight_new,
+                    actualMetalPureWeight: row.actual_metal_pure_weight,
+                }));
+
+                return { data: mappedResults };
+            } catch (error) {
+                log.error('Error @ getActualWIPDepartmentDetail', error);
+                return { data: [] };
+            }
+        };
+
+/**
+         * Active manufacturing departments joined to their active location,
+         * sourced from CUSTOMRECORD_JJ_MANUFACTURING_DEPT (equivalent to the
+         * saved search: type customrecord_jj_manufacturing_dept, filtered to
+         * isinactive = F on both the department and its joined
+         * CUSTRECORD_JJ_MANDEPT_LOCATION, columns internalid/name on both).
+         * Powers the Location and Department filter dropdowns: the Location
+         * dropdown lists every distinct joined location, and the Department
+         * dropdown can be narrowed to only the departments under whichever
+         * location the user picked first.
+         * @returns {Array<{departmentId: number, departmentName: string,
+         *   locationId: number|null, locationName: string|null}>}
+         */
+        const getManufacturingDepartments = () => {
+            try {
+                let query = `
+                    SELECT
+                      CUSTOMRECORD_JJ_MANUFACTURING_DEPT.ID AS department_id,
+                      CUSTOMRECORD_JJ_MANUFACTURING_DEPT.name AS department_name,
+                      Location.ID AS location_id,
+                      Location.name AS location_name
+                    FROM
+                      CUSTOMRECORD_JJ_MANUFACTURING_DEPT
+                    LEFT JOIN
+                      Location
+                    ON
+                      CUSTOMRECORD_JJ_MANUFACTURING_DEPT.custrecord_jj_mandept_location = Location.ID
+                    WHERE
+                      NVL(CUSTOMRECORD_JJ_MANUFACTURING_DEPT.isinactive, 'F') = ?
+                      AND (Location.ID IS NULL OR NVL(Location.isinactive, 'F') = ?)
+                `;
+                let results = runQuery(query, 'getManufacturingDepartments', ['F', 'F']);
+                return results.map((row) => ({
+                    departmentId: row.department_id,
+                    departmentName: row.department_name,
+                    locationId: row.location_id,
+                    locationName: row.location_name,
+                }));
+            } catch (error) {
+                log.error('Error @ getManufacturingDepartments', error);
+                return [];
+            }
+        };
+
+        const wipModel = { getActualWIPReport, getActualWIPSummary, getActualWIPDepartmentDetail, getManufacturingDepartments };
         jjUtil.applyTryCatch(wipModel, 'JJ CM WIP Saved Searches');
 
         return wipModel;
